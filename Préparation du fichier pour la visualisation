@@ -1,0 +1,120 @@
+import yfinance as yf
+import pandas as pd
+import sqlite3
+import time
+from datetime import datetime, timedelta
+import requests
+from io import StringIO
+
+url = r"https://en.wikipedia.org/wiki/CAC_40#Composition"
+
+#__________________________________________________________________________________
+# Mimer un navigateur pour accéder au lien
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
+# Récupération du contenu
+response = requests.get(url, headers=headers)
+
+# Vérification de la requête pour détecter les erreurs
+response.raise_for_status()
+#_________________________________________________________________________________________
+
+table = pd.read_html(StringIO(response.text))
+df_cac40=table[4]
+
+tickers=df_cac40['Ticker'].tolist()
+tickers.append('^FCHI')
+
+
+#Création de la connexion SQL
+conn = sqlite3.connect('donnees_boursecac40sur10ans.db')
+cursor = conn.cursor()
+
+#Création de la table 'prices'
+#On définit ticker et date comme CLÉ PRIMAIRE pour éviter les doublons
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS prices (
+    ticker TEXT,
+    date TEXT,
+    adj_close REAL,
+    volume INTEGER,
+    PRIMARY KEY (ticker, date)
+)
+''')
+conn.commit()
+
+# 3. Paramètres de temps (10 ans)
+start_date = (datetime.now() - timedelta(days=10*365)).strftime('%Y-%m-%d')
+
+
+#Extraction
+for t in tickers:
+    try:
+
+        # ON AJOUTE auto_adjust=False pour retrouver la colonne 'Adj Close'
+        df = yf.download(t, start=start_date, interval="1d", progress=False, auto_adjust=False)
+          
+# On remet la date en colonne
+        if not df.empty:
+            df = df.reset_index()
+
+            # Nettoyage des noms de colonnes
+            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+            # On ajoute le nom de l'entreprise
+            df['ticker'] = t
+
+            # On ne garde que ce qui nous intéresse
+            df_to_save = df[['Date', 'ticker', 'Adj Close', 'Volume']]
+
+            # On renomme pour SQL
+            df_to_save.columns = ['date', 'ticker', 'adj_close', 'volume']
+
+            # On transforme la date en texte simple (YYYY-MM-DD)
+            df_to_save['date'] = pd.to_datetime(df_to_save['date']).dt.strftime('%Y-%m-%d')
+
+            #Envoie dans la base SQL
+            df_to_save.to_sql('prices', conn, if_exists='append', index=False)
+
+        # Pause pour éviter d'être banni par le serveur
+        time.sleep(1.2)
+
+    except Exception as e:
+        print(f"Erreur sur {t} : {e}")
+
+print("Extraction terminée !")
+conn.close()
+
+
+from numpy import select
+import pandas as pd
+import sqlite3
+
+conn = sqlite3.connect('donnees_boursecac40sur10ans.db')
+
+extraction = pd.read_sql_query("SELECT ticker, date, adj_close FROM prices", conn)
+pivot= extraction.pivot(index='date', columns='ticker', values='adj_close')
+
+rentabilite= pivot.pct_change(fill_method=None).dropna()
+print ("La rentabilité est de :", rentabilite)
+
+marché='^FCHI'
+
+betas = {}
+
+for action in rentabilite.columns:
+  if action != marché:
+    covariance = rentabilite[action].cov(rentabilite[marché])
+    variance = rentabilite[marché].var()
+    beta = covariance / variance
+    betas[action] = beta # Store beta in the dictionary
+    print(f"Le beta de {action} est {beta}")
+
+# Conversion du dictionnaire en une série Pandas pour le tri
+df_betas = pd.Series(betas, name='Beta')
+
+# Tri du plus elevé au moins élevé
+df_betas_sorted = df_betas.sort_values(ascending=False)
+print("Voici les bêtas, du plus élevé au moins élevé:", df_betas_sorted)
