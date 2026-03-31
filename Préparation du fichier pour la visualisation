@@ -118,3 +118,22 @@ df_betas = pd.Series(betas, name='Beta')
 # Tri du plus elevé au moins élevé
 df_betas_sorted = df_betas.sort_values(ascending=False)
 print("Voici les bêtas, du plus élevé au moins élevé:", df_betas_sorted)
+
+Taux_sans_risque = 0.03
+Prime_de_risque = 0.0734
+
+# Calcul du Coût des Fonds Propres (Ke = Rf + (Beta * Prime)
+k_medaf_series = (Taux_sans_risque + (df_betas * Prime_de_risque)) * 100
+
+# Créez un nouveau DataFrame combinant les bêtas et les K_medaf
+df_capm = pd.DataFrame({
+    'Beta': df_betas,
+    'K_medaf (%)': k_medaf_series
+})
+
+# On trie pour voir les résultats
+print(df_capm.sort_values(by='K_medaf (%)', ascending=False))
+
+# Exportation pour Power BI
+df_capm.to_csv('analyse_beta_ke.csv', index=True)
+# 'index=True' permet de garder le nom des Tickers (LVMH, etc.)
